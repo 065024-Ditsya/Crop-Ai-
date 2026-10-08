@@ -1,4 +1,4 @@
-import os, re, io, random, datetime, requests
+import os, re, io, time, random, datetime, requests
 from urllib.parse import quote
 import streamlit as st
 from google import genai
@@ -17,7 +17,7 @@ def build_favicon():
     return img
 
 
-st.set_page_config(page_title="Crop.ai", page_icon=build_favicon(), initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Crop.ai", page_icon=build_favicon(), initial_sidebar_state="expanded")
 
 # ---------- Theme + visual polish ----------
 st.html("""
@@ -553,19 +553,33 @@ if text or voice:
         parts.append(types.Part.from_bytes(data=voice.getvalue(), mime_type="audio/wav"))
 
     with st.chat_message("assistant", avatar="🌾"):
-        client = genai.Client(api_key=key)
+        client = genai.Client(api_key=key.strip())
         ans = None
+        errors = []
         # Try the newest model first; if it's overloaded (503), fall back to a lighter model
-        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]:
-            try:
-                r = client.models.generate_content(
-                    model=model_name, contents=parts,
-                    config=types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3))
-                ans = r.text
+        MODEL_CHAIN = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite",
+                       "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash"]
+        for model_name in MODEL_CHAIN:
+            for attempt in range(2):  # one quick retry for temporary overload (503)
+                try:
+                    r = client.models.generate_content(
+                        model=model_name, contents=parts,
+                        config=types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3))
+                    ans = r.text
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    errors.append("%s -> %s: %s" % (model_name, type(e).__name__, msg[:250]))
+                    if attempt == 0 and ("503" in msg or "UNAVAILABLE" in msg):
+                        time.sleep(1.5)
+                        continue
+                    break
+            if ans:
                 break
-            except Exception:
-                continue
         if ans is None:
+            with st.expander("Technical details (why the AI was unavailable)"):
+                for line in errors:
+                    st.code(line)
             # All models failed/overloaded: fall back to the rule-based, code-computed advice
             ans = ("AI is unavailable right now. Basic advice: your %s is at '%s' stage. Watch for: %s. %s "
                    "For a diagnosis contact your Block Agriculture Officer." % (crop, stage, watch, verdict))
