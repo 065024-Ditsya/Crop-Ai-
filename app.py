@@ -474,7 +474,8 @@ with st.sidebar:
     crop = st.selectbox("Crop", list(KB_STAGES))
     sown = st.date_input("Sowing / transplanting date", datetime.date.today() - datetime.timedelta(days=50))
     key = st.text_input("Gemini API key", type="password", value=os.getenv("GEMINI_API_KEY", ""))
-    voice_reply = st.checkbox("🔊 Read answers aloud", value=False)
+    voice_reply = st.checkbox("🔊 Auto-read every new answer aloud", value=False,
+                                help="Or leave this off and tap the 🔊 Listen button under any answer.")
 
     st.info("Your messages and photos are sent to Google's Gemini API. Do not share personal IDs.")
 
@@ -563,6 +564,18 @@ with st.expander("💰 Today's Mandi Price — %s (sample)" % crop):
 CONTEXT = "FARM CONTEXT: district=%s, crop=%s, days since sowing=%d, stage=%s, common risks=%s, weather=%s, spray verdict=%s" % (
     district, crop, das, stage, watch, weather, verdict)
 
+def listen_controls(idx, m):
+    """Per-answer 🔊 Listen button (works for Bengali and English) plus the audio player."""
+    if not m.get("audio"):
+        if st.button("🔊 Listen", key="tts_%d" % idx):
+            with st.spinner("Generating voice..."):
+                m["audio"] = speak(m["text"])
+            if not m["audio"]:
+                st.warning("Could not generate audio right now (needs internet). Please try again.")
+    if m.get("audio"):
+        st.audio(m["audio"], format="audio/mp3")
+
+
 # ---------- Chat history ----------
 for i, m in enumerate(st.session_state.msgs):
     with st.chat_message(m["role"], avatar="👨‍🌾" if m["role"]=="user" else "🌾"):
@@ -572,8 +585,7 @@ for i, m in enumerate(st.session_state.msgs):
                 confidence_badge(m["confidence"], bengali=has_bengali(m["text"]))
             if m.get("source"):
                 st.caption("Source: %s" % m["source"])
-            if m.get("audio"):
-                st.audio(m["audio"], format="audio/mp3")
+            listen_controls(i, m)
             st.feedback("thumbs", key="fb_%d" % i)
             wa_text = quote("🌾 Crop.ai advice:\n\n%s" % m["text"])
             st.link_button("📤 Share this advice", "https://wa.me/?text=%s" % wa_text)
@@ -697,6 +709,9 @@ if text or voice or photo:
                 audio_bytes = speak(clean_ans)
             if audio_bytes:
                 st.audio(audio_bytes, format="audio/mp3")
+        if not audio_bytes:
+            # same key as the history loop will use for this message, so the click is picked up after rerun
+            st.button("🔊 Listen", key="tts_%d" % len(st.session_state.msgs))
 
         wa_text = quote("🌾 Crop.ai advice:\n\n%s" % clean_ans)
         st.link_button("📤 Share this advice", "https://wa.me/?text=%s" % wa_text)
