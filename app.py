@@ -348,11 +348,21 @@ def has_bengali(s):
     return bool(re.search(r"[\u0980-\u09FF]", s or ""))
 
 
+def clean_for_speech(text):
+    """Strip markdown symbols (bold stars, headings, backticks, links) so they are not read aloud."""
+    t = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)      # [label](url) -> label
+    t = re.sub(r"[*_`#>~|]+", "", t)                         # bold/italic/code/heading marks
+    t = re.sub(r"^\s*[-•]\s+", "", t, flags=re.MULTILINE)    # bullet markers
+    t = re.sub(r"\s*\n+\s*", " ", t)                         # line breaks -> spaces
+    return re.sub(r"\s{2,}", " ", t).strip()
+
+
 def speak(text):
     try:
-        lang = "bn" if has_bengali(text) else "en"
+        spoken = clean_for_speech(text)
+        lang = "bn" if has_bengali(spoken) else "en"
         buf = io.BytesIO()
-        gTTS(text=text, lang=lang).write_to_fp(buf)
+        gTTS(text=spoken, lang=lang).write_to_fp(buf)
         return buf.getvalue()
     except Exception:
         return None
@@ -515,18 +525,31 @@ for col, ex in zip(ex_cols, examples):
     if col.button(ex, use_container_width=True):
         st.session_state.pending_q = ex
 
-attach_col, _ = st.columns([1, 5])
-with attach_col:
-    with st.popover("📷🎤 Attach"):
-        photo = st.file_uploader("Leaf / crop photo", type=["jpg", "jpeg", "png"])
-        voice = st.audio_input("Record your question")
-typed = st.chat_input("আপনার প্রশ্ন লিখুন / Ask your question")
+st.caption("⌨️ Type, 📎 attach a leaf photo, or 🎤 record your voice — all from the box below.")
+_PLACEHOLDER = "আপনার প্রশ্ন লিখুন / Ask your question"
+try:
+    prompt = st.chat_input(_PLACEHOLDER, accept_file=True, file_type=["jpg", "jpeg", "png"],
+                           accept_audio=True)
+except TypeError:  # older Streamlit without attach/mic support: plain text box
+    prompt = st.chat_input(_PLACEHOLDER)
+
+typed, photo, voice = None, None, None
+if prompt:
+    if isinstance(prompt, str):
+        typed = prompt
+    else:
+        typed = (getattr(prompt, "text", "") or "").strip() or None
+        _files = getattr(prompt, "files", None) or []
+        photo = _files[0] if _files else None
+        voice = getattr(prompt, "audio", None)
 
 text = typed or st.session_state.pending_q
 st.session_state.pending_q = None
 
-if text or voice:
-    q = text or "(voice question)"
+if text or voice or photo:
+    q = text or ("(voice question)" if voice else "(photo)")
+    if text and photo:
+        q = text + "  📎 (photo attached)"
     st.session_state.msgs.append({"role": "user", "text": q})
     with st.chat_message("user", avatar="👨‍🌾"):
         st.write(q)
@@ -547,10 +570,12 @@ if text or voice:
         parts.append("%s: %s" % (m["role"], m["text"]))
     if text:
         parts.append("user: " + text)
+    elif photo and not voice:
+        parts.append("user: Please look at this photo of my crop and tell me what might be wrong.")
     if photo:
-        parts.append(types.Part.from_bytes(data=photo.getvalue(), mime_type=photo.type))
+        parts.append(types.Part.from_bytes(data=photo.getvalue(), mime_type=photo.type or "image/jpeg"))
     if voice:
-        parts.append(types.Part.from_bytes(data=voice.getvalue(), mime_type="audio/wav"))
+        parts.append(types.Part.from_bytes(data=voice.getvalue(), mime_type=voice.type or "audio/wav"))
 
     with st.chat_message("assistant", avatar="🌾"):
         client = genai.Client(api_key=key.strip())
